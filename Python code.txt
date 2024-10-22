@@ -1,0 +1,128 @@
+##PRE-PROCESSING DATA
+
+import pandas as pd
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+from sklearn.model_selection import train_test_split
+import numpy as np
+
+def load_and_preprocess_data(file_path):
+    df = pd.read_csv(file_path)
+    df['Meta_score'].fillna(df['Meta_score'].median(), inplace=True)
+    df['Gross'] = df['Gross'].str.replace(',', '').astype(float)
+    df['Gross'].fillna(df['Gross'].median(), inplace=True)
+
+    df_encoded = df.copy()
+
+    genre_encoder = OneHotEncoder()
+    genre_encoded = genre_encoder.fit_transform(df_encoded[['Genre']]).toarray()
+    genre_encoded_df = pd.DataFrame(genre_encoded, columns=genre_encoder.get_feature_names_out(['Genre']))
+
+    director_encoder = LabelEncoder()
+    df_encoded['Director_Encoded'] = director_encoder.fit_transform(df_encoded['Director'])
+
+    df_encoded = pd.concat([df_encoded, genre_encoded_df], axis=1)
+
+    return df_encoded, genre_encoder, director_encoder
+
+file_path = '/content/imdb_top_200.csv'
+df_encoded, genre_encoder, director_encoder = load_and_preprocess_data(file_path)
+df_encoded.head()
+
+
+#MODEL TRAINING
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+
+def train_imdb_rating_model(df_encoded, genre_encoder):
+    features = genre_encoder.get_feature_names_out(['Genre']).tolist() + ['Director_Encoded', 'Meta_score', 'No_of_Votes', 'Gross']
+    X = df_encoded[features]
+    y = df_encoded['IMDB_Rating']
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    print("MSE:", mse)
+    print("R2 Score:", r2)
+
+    return model
+
+imdb_rating_model = train_imdb_rating_model(df_encoded, genre_encoder)
+
+#VISUALIZATION
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def visualize_data(df):
+    # Genre vs. IMDb Rating
+    genre_ratings = df[['Genre', 'IMDB_Rating']].copy()
+    genre_ratings = genre_ratings.set_index(['IMDB_Rating']).Genre.str.split(',', expand=True).stack().reset_index()
+    genre_ratings.columns = ['IMDB_Rating', 'drop', 'Genre']
+    genre_ratings.drop('drop', axis=1, inplace=True)
+    avg_genre_ratings = genre_ratings.groupby('Genre')['IMDB_Rating'].mean().sort_values(ascending=False)
+
+    plt.figure(figsize=(15, 8))
+    sns.barplot(x=avg_genre_ratings.values, y=avg_genre_ratings.index, palette='viridis')
+    plt.title('Average IMDb Ratings by Genre')
+    plt.xlabel('Average IMDb Rating')
+    plt.ylabel('Genre')
+    plt.tight_layout()
+    plt.show()
+
+    director_avg_ratings = df_encoded.groupby('Director')['IMDB_Rating'].mean().sort_values(ascending=False)
+    top_directors = director_avg_ratings.nlargest(20)  # Get the top 20
+
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x=top_directors.values, y=top_directors.index, palette='viridis')
+    plt.title('Average IMDb Ratings by Top Directors')
+    plt.xlabel('Average IMDb Rating')
+    plt.ylabel('Director')
+    plt.tight_layout()
+    plt.show()
+
+visualize_data(df_encoded)
+
+# prediction
+import numpy as np
+
+def predict_imdb_rating(model, genre_encoder, director_encoder):
+    genre_input = input("Enter the genre(s) of the movie (comma separated if multiple): ")
+    director_input = input("Enter the director's name: ")
+    meta_score_input = float(input("Enter the Meta score: "))
+    no_of_votes_input = int(input("Enter the number of votes: "))
+    gross_input = input("Enter the gross earnings: ").replace(',', '')  # Remove commas
+    gross_input = float(gross_input)  # Convert to float
+
+    genre_input_split = [genre.strip() for genre in genre_input.split(',')]
+
+    # Ensure genres are valid
+    valid_genres = genre_encoder.categories_[0]
+    genre_input_split = [genre for genre in genre_input_split if genre in valid_genres]
+    if not genre_input_split:
+        raise ValueError("None of the entered genres are recognized.")
+
+    # Create an encoded array for the genres
+    genre_encoded_input = np.sum(genre_encoder.transform([[genre] for genre in genre_input_split]).toarray(), axis=0)
+
+    # Ensure director is valid
+    try:
+        director_encoded_input = director_encoder.transform([director_input])
+    except ValueError:
+        raise ValueError(f"Director '{director_input}' is not recognized.")
+
+    # Create input array in the expected format
+    X_input = np.concatenate((genre_encoded_input, [[director_encoded_input[0], meta_score_input, no_of_votes_input, gross_input]]), axis=None).reshape(1, -1)
+
+    imdb_rating = model.predict(X_input)[0]
+    return imdb_rating
+
+# Calling the function to make a prediction
+predicted_rating = predict_imdb_rating(imdb_rating_model, genre_encoder, director_encoder)
+print(f"Predicted IMDb Rating: {predicted_rating}")
